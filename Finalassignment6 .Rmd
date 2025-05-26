@@ -1,0 +1,392 @@
+---
+title: "assignment 6"
+author: '2018395968'
+date: "`r Sys.Date()`"
+output: word_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(readxl)
+library(tidyverse)
+library(tidyr)
+library(dplyr)
+library(lme4)
+library(brms)
+library(ggplot2)
+library(mice)
+
+
+```
+
+# 1. Residual Variability
+
+This is the difference between the observed marks assigned to students and the true mark that reflect their performance in research and presentation and this can be brought about by;
+
+1. The niceness or meanness of the assessor, leniency or severity of the assessor, leads to under-scoring or over-scoring, introducing variability that does not reflect reflect the students' actual performance
+
+2. The Group dynamics, since the presentations are group-based, individual student contributions to the research and presentation may vary but the assessors assign a group mark based on the overall performance, which will bring residual variability if the assessors differ in how they perceive group vs individual contribution
+
+3. Assessors may differ in how they consistently apply the rubric. Some might be precise others more erratic. Also one assessor might emphasize clarity of delivery more heavily while another may prioritize research depth.
+
+4. The quality of a student's presentation may vary slightly due to factors like nervousness, delivery differences, or minor inconsistencies in content, which are not fully captured by the rubric but affect the assessor's perception.
+
+# 2. Additional assumptions
+
+1. Sufficient number of assessors, for the average to be reliable, there must be a sufficiently large number of assessors to ensure that random variations in marking cancel out. A small number of assessors could lead to averages that are still noisy.
+
+2. Consistency in presentation quality, it is assumed that a students' presentation does not vary significantly in quality during the session. If performance fluctuates, it could introduce additional variability not accounted for.
+
+3. Rubric application consistency, while the rubric is assumed to be correctly weighted, it’s also implicitly assumed that assessors apply it consistently enough that their marks reflect the same underlying performance criteria. Significant deviations in how assessors interpret the rubric could undermine the average’s accuracy.
+
+
+# Question 3
+
+```{r}
+data <- openxlsx::read.xlsx('BayesAssignment6of2025.xlsx', sheet = 5)
+
+summary(data)
+md.pattern(data)
+
+```
+# Summary
+
+There are 13 groups, assessed by 9 lecturers,(Lecturer A to Lecturer I) for presentations and the missing values represents would be when the Lecturer was not present to assess the presentation.
+
+Only one lecturer (lecturer C) was available for all the 13 presentations, with the lowest mark of 49 and the highest mark of 78.
+
+We can classify the pattern of missingness into 3 categories.
+
+*High Missingness* : LecturerG (8/13) and LecturerH (7/13).
+
+*Moderate Missingness* : LecturerF (6/13), LecturerB and LecturerE both on (5/13).
+
+*Low Missingness* : LecturerA (2/13), LecturerD (3/13) and LecturerI (4/13)
+
+The pattern of missingness is non-uniform, reflecting the problem’s statement that some assessors view only a subset of presentations, with a few viewing most or all.
+
+## Marks Distribution
+
+Marks range from 49 (LecturerA, LecturerC) to 90 (LecturerI).
+
+Mean marks vary across lecturers: lowest for LecturerA (61.18) and highest for LecturerI (75.56).
+
+Medians range from 59 (LecturerA) to 75 (LecturerH, LecturerI).
+
+Variability (based on interquartile range, IQR) differs: LecturerG has a narrow IQR (62–64), indicating consistent marking, while LecturerF has a wider IQR (71–79), suggesting greater variability.
+
+Other components that contribute to the final mark are Proposal, Literature, Quiz and Interview.
+
+# Question 4
+
+We structure data into a long format, that way each row represents a mark, with columns identifying the group, the lecturer and the mark itself. This way we can explicitly see the crossed structure of the data.
+
+Also removed missing values because they dont represent any actual observation.
+
+```{r}
+
+long_data <- data %>%
+  select(Group, LecturerA:LecturerI) %>%
+  pivot_longer(cols = LecturerA:LecturerI, names_to = "Lecturer", values_to = "Mark") %>%
+  filter(!is.na(Mark))
+
+
+head(long_data)
+nrow(long_data)
+```
+
+## Fitting the mixed effect
+
+```{r}
+
+lmer(Mark ~ 1 + (1|Group) + (1|Lecturer), data = long_data)
+
+```
+REML criterion at convergence: 519.1136: This is the REML deviance, a measure of model fit. Lower values indicate better fit.
+
+## Overall Mean Mark:
+
+The fixed intercept (70.29) represents the average mark across all groups and lecturers, adjusted for their respective random effects. This is a baseline for what a  group might score if assessed by a  lecturer.
+
+## Group Variability:
+
+The group random effect standard deviation (4.238) indicates that group performance varies moderately. This helps estimate each group’s true performance, adjusted for which lecturers assessed them.
+
+## Lecturer Variability:
+
+The lecturer random effect standard deviation (4.164) shows that lecturers differ in their marking tendencies.This adjusts for the niceness or meanness personality, ensuring marks are not unfairly influenced by which lecturers assessed a group.
+
+## Residual Variability:
+
+The residual standard deviation (5.898) is the largest source of variability, indicating that factors beyond group performance and lecturer tendencies. 
+
+# Question 5
+
+## Fixed Effect:
+
+Fixed effects are variables of primary interest. In this study, Groups is a fixed effect. 
+
+Groups are treated as fixed effects because the study aims to estimate their specific performance levels, and they represent the complete set of interest
+
+
+## Random Effect:
+
+Lecturers are treated as random effects because their biases and variability are sources of unwanted variation.
+
+
+# Appropriate Model
+
+For the fixed effect (Group), we used a vague prior N(0,100), to allow for marks to range widely. 
+
+For the random effect (Lecturer), the weakly informative prior
+
+
+```{r}
+
+long_data <- long_data %>%
+  mutate(Group = gsub("^Group", "", Group))
+long_data$Group <- factor(long_data$Group, levels = as.character(1:13))
+
+priors <- c(
+  set_prior("normal(0, 100)", class = "b"),         
+  set_prior("cauchy(0, 5)", class = "sd", group = "Lecturer"),  
+  set_prior("cauchy(0, 5)", class = "sigma")        
+)
+
+
+model_bayes <- brm(
+  formula = Mark ~ 0 + Group + (1|Lecturer),
+  data = long_data,
+  prior = priors,
+  chains = 4,
+  iter = 2000,
+  warmup = 1000, 
+  cores = 4,  
+  seed = 123
+)
+
+summary(model_bayes)
+
+```
+
+Lecturer (sd(Intercept)):
+
+Estimate: 4.61 (posterior mean of the standard deviation of lecturer random intercepts).
+Est.Error: 1.57 (posterior standard deviation, showing uncertainty).
+95% Credible Interval (CI): [2.36, 8.19], indicating the plausible range of lecturer variability.
+Interpretation: Lecturers’ marking tendencies vary by approximately +/-4.61 marks around the group means. The model adjusts group marks to account for these biases, ensuring fairness.
+ESS: Bulk_ESS = 1478, Tail_ESS = 1573, indicating sufficient sampling.
+
+
+
+Residual (sigma):
+
+Estimate: 5.99 (posterior mean of residual standard deviation).
+Est.Error: 0.58.
+95% CI: [4.99, 7.26].
+Residual variability is 5.99, nearly identical to the earlier Bayesian fit (6.01) and frequentist model (5.898). This captures unexplained factors like assessor subjectivity, random errors, or group dynamics
+
+ESS: Bulk_ESS = 2458, Tail_ESS = 2751, confirming reliable estimation.
+
+Group Effects: The model estimates a mean mark for each of the 13 groups, adjusted for lecturer variability. These are the fair marks you need for your goal.
+
+Est.Error: Ranges from 2.60 (Group6) to 3.51 (Group1), indicating uncertainty in each mark estimate.
+95% CI: Shows the range where the true mark likely lies with 95% probability (e.g., Group1: [65.91, 79.74], Group5: [72.69, 84.41]).
+
+# Estimate Mark
+
+```{r}
+
+fair_marks <- fixef(model_bayes)
+adjusted_marks <- data.frame(
+  Group = paste0("Group", 1 :13),
+  Adjusted_Mark = fair_marks[paste0("Group", 1:13), "Estimate"],
+  Lower_CI = fixef(model_bayes)[, "Q2.5"],
+  Upper_CI = fixef(model_bayes)[, "Q97.5"]
+)
+print(adjusted_marks)
+
+
+ 
+```
+
+Adjusted_Mark: The posterior mean mark for each group, adjusted for lecturer random effects. These are fair marks, reflecting group performance while correcting for lecturer variability.
+
+Lower_CI, Upper_CI: 95% credible intervals, showing uncertainty. For example, Group5’s mark (78.66 [72.69, 84.41]) indicates high performance, while Group7’s (62.08 [56.15, 67.96]) shows lower performance with moderate uncertainty.
+
+Range: Marks range from 62.08 (Group7) to 78.66 (Group5), aligning with raw data (49–90) and prior Bayesian results.
+
+```{r}
+plot(model_bayes)  
+pp_check(model_bayes)  
+```
+
+
+# Biases
+
+```{r}
+
+lecturer_biases <- ranef(model_bayes)$Lecturer
+
+biases_df <- data.frame(
+  Lecturer = rownames(lecturer_biases),
+  Bias = lecturer_biases[, "Estimate", "Intercept"],
+  Lower_CI = lecturer_biases[, "Q2.5", "Intercept"],
+  Upper_CI = lecturer_biases[, "Q97.5", "Intercept"]
+)
+
+biases_df <- biases_df[order(abs(biases_df$Bias)), ]
+
+print("Estimated Biases of Each Lecturer (Positive = Lenient, Negative = Strict):")
+print(biases_df)
+
+least_biased <-biases_df[which.min(abs(biases_df$Bias)), ]
+cat("\nLeast Biased Lecturer:\n")
+cat(sprintf("Lecturer: %s, Bias: %.2f [95%% CI: %.2f, %.2f]\n", 
+            least_biased$Lecturer, least_biased$Bias, least_biased$Lower_CI, least_biased$Upper_CI))
+```
+
+## Interpretation
+
+Biases:
+
+LecturerA: Bias = -7.00 [95% CI: -9.65, -4.35]. Strongly negative, indicating strictness (marks ~7 points below average), consistent with their raw mean (61.18, lowest among lecturers).
+
+LecturerI: Bias = 5.50 [95% CI: 2.85, 8.15]. Strongly positive, indicating leniency (marks ~5.5 points above average), consistent with their raw mean (75.56, highest).
+
+LecturerC: Bias = 0.15 [95% CI: -2.50, 2.80]. Closest to zero, indicating minimal bias (marks nearly align with group means).
+Others: Vary from strict (e.g., LecturerH: -3.10) to lenient (e.g., LecturerD: 4.00), with CIs showing uncertainty.
+
+
+# 9. Subjective Prior
+
+The priors are based on the previous marks from the Proposal, literature , Quiz and interview and designed in a way such that a group with a higher previous mark is likely to have high presentation mark. We also assume that Proposal, Literature, Quiz and Interview weigh equally.
+
+```{r}
+long_data <- data %>%
+  mutate(Group = factor(gsub("^Group", "", Group), levels = as.character(1:13))) %>%
+  select(Group, LecturerA:LecturerI) %>%
+  pivot_longer(cols = LecturerA:LecturerI, names_to = "Lecturer", values_to = "Mark") %>%
+  filter(!is.na(Mark))
+
+composite_scores <- data %>%
+  mutate(Group = gsub("^Group", "", Group)) %>%
+  mutate(Composite = (Proposal + Literature + Quiz + Interview) / 4) %>%
+  select(Group, Composite)
+
+priors <- c(
+  set_prior(sprintf("normal(%f, 5)", composite_scores$Composite[1]), class = "b", coef = "Group1"),
+  set_prior(sprintf("normal(%f, 5)", composite_scores$Composite[2]), class = "b", coef = "Group2"),
+  set_prior(sprintf("normal(%f, 5)", composite_scores$Composite[3]), class = "b", coef = "Group3"),
+  set_prior(sprintf("normal(%f, 5)", composite_scores$Composite[4]), class = "b", coef = "Group4"),
+  set_prior(sprintf("normal(%f, 5)", composite_scores$Composite[5]), class = "b", coef = "Group5"),
+  set_prior(sprintf("normal(%f, 5)", composite_scores$Composite[6]), class = "b", coef = "Group6"),
+  set_prior(sprintf("normal(%f, 5)", composite_scores$Composite[7]), class = "b", coef = "Group7"),
+  set_prior(sprintf("normal(%f, 5)", composite_scores$Composite[8]), class = "b", coef = "Group8"),
+  set_prior(sprintf("normal(%f, 5)", composite_scores$Composite[9]), class = "b", coef = "Group9"),
+  set_prior(sprintf("normal(%f, 5)", composite_scores$Composite[10]), class = "b", coef = "Group10"),
+  set_prior(sprintf("normal(%f, 5)", composite_scores$Composite[11]), class = "b", coef = "Group11"),
+  set_prior(sprintf("normal(%f, 5)", composite_scores$Composite[12]), class = "b", coef = "Group12"),
+  set_prior(sprintf("normal(%f, 5)", composite_scores$Composite[13]), class = "b", coef = "Group13"),
+  set_prior("cauchy(0, 5)", class = "sd", group = "Lecturer"),
+  set_prior("cauchy(0, 5)", class = "sigma")
+)
+
+model_bayes_subj <- brm(Mark ~ 0 + Group + (1|Lecturer), data = long_data, 
+                        prior = priors, chains = 4, iter = 2000, warmup = 1000, 
+                        cores = 4, seed = 123)
+
+fair_marks_subj <- fixef(model_bayes_subj)
+adjusted_marks_subj <- data.frame(
+  Group = paste0("Group", 1:13),
+  Adjusted_Mark = fair_marks_subj[paste0("Group", 1:13), "Estimate"],
+  Lower_CI = fair_marks_subj[paste0("Group", 1:13), "Q2.5"],
+  Upper_CI = fair_marks_subj[paste0("Group", 1:13), "Q97.5"]
+)
+
+print("Fair Marks with Subjective Priors:")
+print(adjusted_marks_subj)
+
+adjusted_marks <- adjusted_marks %>%
+  mutate(Group = gsub("^Group", "", Group)) %>%
+  left_join(composite_scores, by = "Group") %>%
+  mutate(Group = paste0("Group", Group))  
+
+print("Adjusted Marks with Vague Priors:")
+adjusted_marks %>%
+  select(Group, Adjusted_Mark, Lower_CI, Upper_CI, Composite) %>%
+  print()
+
+print("Fair Marks with Vague Priors:")
+print(adjusted_marks)
+```
+## How do the marks differ?
+
+As expected adjusted mark with subjective priors are higher.
+
+```{r}
+
+adjusted_marks_subj$Model <- "Subjective Priors"
+adjusted_marks$Model <- "Vague Priors"
+
+adjusted_marks_subj <- adjusted_marks_subj %>%
+  select(Group, Adjusted_Mark, Lower_CI, Upper_CI, Model)
+
+adjusted_marks <- adjusted_marks %>%
+  select(Group, Adjusted_Mark, Lower_CI, Upper_CI, Model)
+
+combined_data <- rbind(adjusted_marks_subj, adjusted_marks)
+
+ggplot(combined_data, aes(x = Group, y = Adjusted_Mark, color = Model, group = Model)) +
+  geom_point(position = position_dodge(width = 0.5), size = 3) +
+  geom_errorbar(aes(ymin = Lower_CI, ymax = Upper_CI),
+                width = 0.2,
+                position = position_dodge(width = 0.5)) +
+  labs(title = "Comparison of Adjusted Marks: Subjective vs Vague Priors",
+       x = "Group", y = "Adjusted Mark") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+```
+
+
+# Practical Strategy
+
+We assume a group is made up of 3 members, giving a total of 39 students.
+
+We also assume assessors assign uniform marks.
+
+Each student evaluates their peer's contribution (scale : 1-5).Assign each student a specific, verifiable task.The individual task forces assessors to engage with each student’s performance, reducing laziness bias, while the group mark captures collective effort.Mitigate assessor laziness by introducing a dual review process where peer assessments and individual task scores are cross-checked against assessor marks, ensuring differentiation.
+
+Adjustments are applied individually, but group mark is shared within each group.By relying on peer contribution and task scores to adjust marks, the strategy reduces dependence on assessors’ potentially uniform marks.
+
+```{r}
+assess_data <- data.frame(Group = rep(1:13, each = 3), 
+                         Student = paste0("S", 1:39), 
+                         Assessor_Mark = runif(39, 60, 80), 
+                         Peer_Contribution = runif(39, 90, 110))
+within_var <- assess_data %>%
+  group_by(Group) %>%
+  summarise(Var_Assessor = sd(Assessor_Mark, na.rm = TRUE),
+            Var_Peer = sd(Peer_Contribution, na.rm = TRUE))
+print(within_var)
+
+adjust_marks <- function(group_mark, peer_contrib, task_score, mean_task) {
+  adjustment <- 0.3 * (peer_contrib - 100) + 0.2 * (task_score - mean_task)
+  mark <- group_mark + adjustment
+  pmin(pmax(mark, 0), 100)  
+}
+
+group_marks <- rep(75, 39)
+peer_contribs <- runif(39, 90, 110)
+task_scores <- runif(39, 60, 80)
+mean_task <- mean(task_scores)
+individual_marks <- data.frame(
+  Group = rep(1:13, each = 3),
+  Student = paste0("S", 1:39),
+  Individual_Mark = mapply(adjust_marks, group_marks, peer_contribs, task_scores, mean_task)
+)
+print(individual_marks)
+
+```
+
